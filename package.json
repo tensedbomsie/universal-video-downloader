@@ -1,0 +1,33 @@
+{
+  "name": "universal-video-downloader",
+  "version": "1.0.0",
+  "description": "Paste a link from almost any video site, download it as MP4 or MP3.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.nont.universalvideodownloader",
+    "productName": "Universal Video Downloader",
+    "files": ["main.js", "preload.js", "ui.html", "package.json"],
+    "extraResources": [
+      { "from": "bin", "to": "bin" }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
