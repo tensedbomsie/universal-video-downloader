@@ -50,10 +50,33 @@ ipcMain.handle("open-download-folder", () => {
   shell.openPath(DOWNLOAD_DIR);
 });
 
-function formatSpeed(bytesPerSec) {
-  if (!bytesPerSec || Number.isNaN(bytesPerSec)) return "";
-  return (bytesPerSec / 1024 / 1024).toFixed(1) + " MB/s";
-}
+ipcMain.handle("fetch-info", (event, url) => {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(YTDLP, [url, "--skip-download", "--no-playlist", "--dump-json"], { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (c) => { stdout += c.toString(); });
+    proc.stderr.on("data", (c) => { stderr += c.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        const lastLine = stderr.trim().split(/\r?\n/).pop() || "Could not read that link";
+        reject(new Error(lastLine.replace(/^ERROR:\s*/, "")));
+        return;
+      }
+      try {
+        const info = JSON.parse(stdout);
+        resolve({
+          title: info.title || "Untitled",
+          thumbnail: info.thumbnail || "",
+          duration: info.duration_string || "",
+        });
+      } catch {
+        reject(new Error("Could not read video info"));
+      }
+    });
+    proc.on("error", (err) => reject(err));
+  });
+});
 
 ipcMain.handle("start-download", (event, { url, format, quality }) => {
   fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -65,8 +88,8 @@ ipcMain.handle("start-download", (event, { url, format, quality }) => {
     "--no-playlist",
     "--restrict-filenames",
     "--newline",
+    "--progress",
     "-o", path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
-    "--progress-template", "download:PROG %(progress.downloaded_bytes)s %(progress.total_bytes,progress.total_bytes_estimate)s %(progress.speed)s",
     "--print", "after_move:DONE %(filepath)s",
   ];
 
@@ -82,32 +105,37 @@ ipcMain.handle("start-download", (event, { url, format, quality }) => {
   const proc = spawn(YTDLP, args, { windowsHide: true });
   let finalPath = "";
   let sawProgress = false;
-  let stderrTail = "";
+  let lastStderrLine = "";
   let stdoutBuf = "";
+  let stderrBuf = "";
 
+  // yt-dlp writes its "%(...)s" data (--print) to stdout, but progress/status
+  // lines go to stderr - it suppresses the progress display entirely unless
+  // stderr looks interactive, which is why --progress is required here too.
   proc.stdout.on("data", (chunk) => {
     stdoutBuf += chunk.toString();
     const lines = stdoutBuf.split(/\r?\n/);
-    stdoutBuf = lines.pop(); // keep the last (possibly partial) line for next chunk
-
+    stdoutBuf = lines.pop();
     for (const line of lines) {
-      if (line.startsWith("PROG ")) {
-        const [, downloaded, total, speed] = line.split(" ");
-        const d = parseFloat(downloaded);
-        const t = parseFloat(total);
-        const pct = t > 0 ? (d / t) * 100 : 0;
-        sender.send("progress", { pct: Number.isNaN(pct) ? 0 : pct, speed: formatSpeed(parseFloat(speed)) });
-        sawProgress = true;
-      } else if (line.startsWith("DONE ")) {
-        finalPath = line.slice(5).trim();
-      } else if (line.trim() && sawProgress) {
-        sender.send("processing");
-      }
+      if (line.startsWith("DONE ")) finalPath = line.slice(5).trim();
     }
   });
 
   proc.stderr.on("data", (chunk) => {
-    stderrTail = chunk.toString();
+    stderrBuf += chunk.toString();
+    const lines = stderrBuf.split(/\r?\n/);
+    stderrBuf = lines.pop();
+    for (const line of lines) {
+      const pctMatch = line.match(/^\[download\]\s+([\d.]+)%/);
+      if (pctMatch) {
+        const speedMatch = line.match(/at\s+([\d.]+\s?\w+\/s)/);
+        sender.send("progress", { pct: parseFloat(pctMatch[1]), speed: speedMatch ? speedMatch[1] : "" });
+        sawProgress = true;
+      } else if (line.trim()) {
+        lastStderrLine = line.trim();
+        if (sawProgress) sender.send("processing");
+      }
+    }
   });
 
   proc.on("close", (code) => {
@@ -115,8 +143,7 @@ ipcMain.handle("start-download", (event, { url, format, quality }) => {
       const title = finalPath ? path.basename(finalPath, path.extname(finalPath)) : "your video";
       sender.send("done", { title });
     } else {
-      const lastLine = stderrTail.trim().split(/\r?\n/).pop() || `yt-dlp exited with code ${code}`;
-      sender.send("failed", { message: lastLine.replace(/^ERROR:\s*/, "") });
+      sender.send("failed", { message: (lastStderrLine || `yt-dlp exited with code ${code}`).replace(/^ERROR:\s*/, "") });
     }
   });
 

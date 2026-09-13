@@ -196,6 +196,25 @@
     font-size: 1.02rem; font-weight: 700; letter-spacing: -.01em;
     margin: 0 0 16px;
   }
+  .preview {
+    display: flex; gap: 12px; align-items: center;
+    margin-bottom: 18px; padding-bottom: 18px;
+    border-bottom: 1px solid var(--hair-soft);
+  }
+  .preview-thumb {
+    width: 96px; height: 54px; object-fit: cover;
+    border-radius: var(--r-sm); background: var(--inset);
+    flex: 0 0 auto;
+  }
+  .preview-text { min-width: 0; }
+  .preview-title {
+    font-size: .84rem; font-weight: 600; line-height: 1.32; color: var(--text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .preview-duration {
+    font-size: .72rem; color: var(--dim); margin-top: 5px;
+    font-variant-numeric: tabular-nums;
+  }
   .field-label {
     font-size: .68rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
     color: var(--dimmer); margin-bottom: 8px; display: block;
@@ -285,6 +304,13 @@
 
 <div class="overlay" id="overlay" hidden>
   <div class="modal">
+    <div class="preview">
+      <img class="preview-thumb" id="previewThumb" alt="">
+      <div class="preview-text">
+        <div class="preview-title" id="previewTitle"></div>
+        <div class="preview-duration" id="previewDuration"></div>
+      </div>
+    </div>
     <h2>Choose format</h2>
     <div class="format-toggle">
       <button class="format-btn active" id="fmtMp4" data-fmt="mp4">MP4 (video)</button>
@@ -336,6 +362,9 @@
   const resultSub = el("resultSub");
   const openFolderBtn = el("openFolderBtn");
   const resetBtn = el("resetBtn");
+  const previewThumb = el("previewThumb");
+  const previewTitle = el("previewTitle");
+  const previewDuration = el("previewDuration");
 
   let state = { format: "mp4" };
 
@@ -363,15 +392,36 @@
     if (text) { urlInput.value = text; urlInput.focus(); }
   });
 
-  downloadBtn.addEventListener("click", () => {
-    if (!urlInput.value.trim()) {
+  downloadBtn.addEventListener("click", async () => {
+    const url = urlInput.value.trim();
+    if (!url) {
       hint.style.color = "var(--red)";
       hint.textContent = "Paste a video link first.";
       urlInput.focus();
       return;
     }
-    selectFormat("mp4");
-    overlay.hidden = false;
+    hint.style.color = "var(--dimmer)";
+    hint.textContent = "Works with almost any video URL — auto-detected.";
+    downloadBtn.disabled = true;
+    const originalLabel = downloadBtn.innerHTML;
+    downloadBtn.innerHTML = "Loading preview…";
+    try {
+      const info = await window.api.fetchInfo(url);
+      previewTitle.textContent = info.title;
+      previewDuration.textContent = info.duration;
+      previewDuration.hidden = !info.duration;
+      previewThumb.hidden = !info.thumbnail;
+      previewThumb.onerror = () => { previewThumb.hidden = true; };
+      previewThumb.src = info.thumbnail || "";
+      selectFormat("mp4");
+      overlay.hidden = false;
+    } catch (err) {
+      hint.style.color = "var(--red)";
+      hint.textContent = err.message || "Couldn't read that link.";
+    } finally {
+      downloadBtn.disabled = false;
+      downloadBtn.innerHTML = originalLabel;
+    }
   });
 
   cancelBtn.addEventListener("click", () => { overlay.hidden = true; });
