@@ -105,45 +105,44 @@ ipcMain.handle("start-download", (event, { url, format, quality }) => {
   const proc = spawn(YTDLP, args, { windowsHide: true });
   let finalPath = "";
   let sawProgress = false;
-  let lastStderrLine = "";
-  let stdoutBuf = "";
-  let stderrBuf = "";
+  let lastLine = "";
 
-  // yt-dlp writes its "%(...)s" data (--print) to stdout, but progress/status
-  // lines go to stderr - it suppresses the progress display entirely unless
-  // stderr looks interactive, which is why --progress is required here too.
-  proc.stdout.on("data", (chunk) => {
-    stdoutBuf += chunk.toString();
-    const lines = stdoutBuf.split(/\r?\n/);
-    stdoutBuf = lines.pop();
-    for (const line of lines) {
-      if (line.startsWith("DONE ")) finalPath = line.slice(5).trim();
-    }
-  });
-
-  proc.stderr.on("data", (chunk) => {
-    stderrBuf += chunk.toString();
-    const lines = stderrBuf.split(/\r?\n/);
-    stderrBuf = lines.pop();
-    for (const line of lines) {
-      const pctMatch = line.match(/^\[download\]\s+([\d.]+)%/);
-      if (pctMatch) {
-        const speedMatch = line.match(/at\s+([\d.]+\s?\w+\/s)/);
-        sender.send("progress", { pct: parseFloat(pctMatch[1]), speed: speedMatch ? speedMatch[1] : "" });
-        sawProgress = true;
-      } else if (line.trim()) {
-        lastStderrLine = line.trim();
-        if (sawProgress) sender.send("processing");
+  // yt-dlp's --print output ("DONE ...") reliably lands on stdout, but which
+  // stream carries the --progress "[download] NN%" lines is NOT consistent -
+  // observed it on stderr in some runs and stdout in others with identical
+  // args and binary. Both streams are parsed the same way so it works either
+  // way, instead of gambling on one.
+  const makeHandler = () => {
+    let buf = "";
+    return (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      for (const line of lines) {
+        const pctMatch = line.match(/^\[download\]\s+([\d.]+)%/);
+        if (pctMatch) {
+          const speedMatch = line.match(/at\s+([\d.]+\s?\w+\/s)/);
+          sender.send("progress", { pct: parseFloat(pctMatch[1]), speed: speedMatch ? speedMatch[1] : "" });
+          sawProgress = true;
+        } else if (line.startsWith("DONE ")) {
+          finalPath = line.slice(5).trim();
+        } else if (line.trim()) {
+          lastLine = line.trim();
+          if (sawProgress) sender.send("processing");
+        }
       }
-    }
-  });
+    };
+  };
+
+  proc.stdout.on("data", makeHandler());
+  proc.stderr.on("data", makeHandler());
 
   proc.on("close", (code) => {
     if (code === 0) {
       const title = finalPath ? path.basename(finalPath, path.extname(finalPath)) : "your video";
       sender.send("done", { title });
     } else {
-      sender.send("failed", { message: (lastStderrLine || `yt-dlp exited with code ${code}`).replace(/^ERROR:\s*/, "") });
+      sender.send("failed", { message: (lastLine || `yt-dlp exited with code ${code}`).replace(/^ERROR:\s*/, "") });
     }
   });
 
